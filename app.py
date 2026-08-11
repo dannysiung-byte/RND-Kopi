@@ -2,6 +2,7 @@ import streamlit as st
 import datetime
 import pandas as pd
 import sqlite3
+import os
 
 # Set judul halaman & layout
 st.set_page_config(page_title="Kasir F&B POS", layout="wide", page_icon="☕")
@@ -24,7 +25,7 @@ def init_db():
     ''')
     c.execute('SELECT COUNT(*) FROM stok')
     if c.fetchone()[0] == 0:
-        c.execute('INSERT INTO stok (susu, kopi, cup) VALUES (1000, 500, 20)')
+        c.execute('INSERT INTO stok (susu, kopi, cup) VALUES (1000, 500, 50)')
         
     c.execute('''
         CREATE TABLE IF NOT EXISTS transaksi (
@@ -76,11 +77,34 @@ def load_transaksi():
 init_db()
 
 # ---------------------------------------------------------
-# ESTIMASI BIAYA BAHAN BAKU (COGS / HPP) PER UNIT
+# LOAD DATA MENU DARI FILE CSV
 # ---------------------------------------------------------
-COST_SUSU_PER_ML = 15     # Rp 15.000 / Liter
-COST_KOPI_PER_GRAM = 300  # Rp 300.000 / Kg
-COST_CUP_PER_PCS = 500    # Rp 500 / Cup
+@st.cache_data(ttl=60)
+def load_menu_from_csv():
+    if os.path.exists("menu_resep.csv"):
+        df = pd.read_csv("menu_resep.csv")
+        menu_dict = {}
+        for _, row in df.iterrows():
+            menu_dict[row['nama_menu']] = {
+                "harga": int(row['harga_jual']),
+                "susu": int(row['susu']),
+                "kopi": int(row['kopi']),
+                "cup": int(row['cup']),
+                "foto": str(row['foto'])
+            }
+        return menu_dict
+    else:
+        # Default jika CSV belum dibuat
+        return {
+            "Kopi Susu": {"harga": 10000, "susu": 30, "kopi": 8, "cup": 1, "foto": "https://images.unsplash.com/photo-1517701604599-bb29b565090c?w=500&q=80"}
+        }
+
+DAFTAR_MENU = load_menu_from_csv()
+
+# HPP ESTIMASI PER SATUAN
+COST_SUSU_PER_GR = 25     # Rp 25 / gram (SKM)
+COST_KOPI_PER_GRAM = 150  # Rp 150 / gram
+COST_CUP_PER_PCS = 575    # Rp 575 / pcs
 
 if 'keranjang' not in st.session_state:
     st.session_state.keranjang = []
@@ -90,21 +114,6 @@ if 'last_receipt' not in st.session_state:
     st.session_state.last_receipt = None
 
 stok_db = get_stok()
-
-DAFTAR_MENU = {
-    "Kopi Susu": {
-        "harga": 18000, "susu": 80, "kopi": 15, "cup": 1,
-        "foto": "https://images.unsplash.com/photo-1517701604599-bb29b565090c?w=500&q=80"
-    },
-    "Americano": {
-        "harga": 15000, "susu": 0, "kopi": 20, "cup": 1,
-        "foto": "https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?w=500&q=80"
-    },
-    "Susu Murni": {
-        "harga": 12000, "susu": 150, "kopi": 0, "cup": 1,
-        "foto": "https://images.unsplash.com/photo-1550583724-b2692b85b150?w=500&q=80"
-    }
-}
 
 TOPPING_LIST = {
     "Tanpa Tambahan": 0,
@@ -118,10 +127,10 @@ df_tx_all = load_transaksi()
 total_terjual_all = df_tx_all["jumlah_item"].sum() if not df_tx_all.empty else 0
 total_omzet_all = df_tx_all["omzet"].sum() if not df_tx_all.empty else 0
 
-st.title("☕ Aplikasi Kasir & Manajemen Stok F&B (SQLite Connected)")
+st.title("☕ Aplikasi Kasir & Manajemen Stok F&B (CSV Resep Connected)")
 
 col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("🥛 Stok Susu", f"{stok_db['susu']} ml")
+col1.metric("🥛 Stok Susu/SKM", f"{stok_db['susu']} gram")
 col2.metric("🫘 Stok Biji Kopi", f"{stok_db['kopi']} gram")
 col3.metric("🥤 Stok Cup Plastik", f"{stok_db['cup']} pcs")
 col4.metric("🏆 Total Terjual", f"{total_terjual_all} Cangkir")
@@ -194,14 +203,14 @@ with tab1:
             tambahan_ukuran = 3000 if "Large" in ukuran else 0
             tambahan_espresso = TOPPING_LIST[topping]
             
-            kopi_extra_per_cup = 10 if tambahan_espresso > 0 else 0
+            kopi_extra_per_cup = 8 if tambahan_espresso > 0 else 0
             harga_final_satuan = data_base["harga"] + tambahan_ukuran + tambahan_espresso
             
             susu_req_unit = data_base["susu"]
             kopi_req_unit = data_base["kopi"] + kopi_extra_per_cup
             cup_req_unit = data_base["cup"]
             
-            hpp_unit = (susu_req_unit * COST_SUSU_PER_ML) + (kopi_req_unit * COST_KOPI_PER_GRAM) + (cup_req_unit * COST_CUP_PER_PCS)
+            hpp_unit = (susu_req_unit * COST_SUSU_PER_GR) + (kopi_req_unit * COST_KOPI_PER_GRAM) + (cup_req_unit * COST_CUP_PER_PCS)
             
             if st.button("➕ Tambah Ke Keranjang", type="primary", use_container_width=True):
                 label_espresso = " + Extra Shot" if tambahan_espresso > 0 else ""
@@ -382,7 +391,7 @@ with tab1:
 # === TAB 2: RESTOK ===
 with tab2:
     st.subheader("Form Restok Gudang (Tersimpan Permanen)")
-    ts = st.number_input("Tambah Susu (ml):", min_value=0, value=0, step=100)
+    ts = st.number_input("Tambah Susu (gram):", min_value=0, value=0, step=100)
     tk = st.number_input("Tambah Kopi (gram):", min_value=0, value=0, step=50)
     tcp = st.number_input("Tambah Cup (pcs):", min_value=0, value=0, step=10)
     
