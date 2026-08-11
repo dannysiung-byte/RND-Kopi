@@ -41,9 +41,6 @@ def init_db():
         )
     ''')
     
-    # PERINTAH BERSIHKAN TRANSAKSI UJI COBA (HANYA SEKALI RUNNING)
-    c.execute("DELETE FROM transaksi")
-    
     conn.commit()
     conn.close()
 
