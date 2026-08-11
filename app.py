@@ -38,6 +38,8 @@ def init_db():
             omzet INTEGER,
             hpp_biaya INTEGER,
             laba_bersih INTEGER
+
+    c.execute('DELETE FROM transaksi')
         )
     ''')
     conn.commit()
