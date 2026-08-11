@@ -38,10 +38,12 @@ def init_db():
             omzet INTEGER,
             hpp_biaya INTEGER,
             laba_bersih INTEGER
-
-    c.execute('DELETE FROM transaksi')
         )
     ''')
+    
+    # PERINTAH BERSIHKAN TRANSAKSI UJI COBA (HANYA SEKALI RUNNING)
+    c.execute("DELETE FROM transaksi")
+    
     conn.commit()
     conn.close()
 
@@ -96,7 +98,6 @@ def load_menu_from_csv():
             }
         return menu_dict
     else:
-        # Default jika CSV belum dibuat
         return {
             "Kopi Susu": {"harga": 10000, "susu": 30, "kopi": 8, "cup": 1, "foto": "https://images.unsplash.com/photo-1517701604599-bb29b565090c?w=500&q=80"}
         }
