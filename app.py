@@ -59,7 +59,7 @@ tab_kasir, tab_kasbon, tab_stok, tab_laporan = st.tabs([
 ])
 
 # ==========================================
-# 1. TAB POS KASIR
+# 1. TAB POS KASIR (WITH LIVE STOK DISPLAY)
 # ==========================================
 with tab_kasir:
     st.header("Point of Sale (Kasir)")
@@ -68,18 +68,18 @@ with tab_kasir:
     c.execute("SELECT DISTINCT nama_menu FROM resep")
     menu_list = [row[0] for row in c.fetchall()]
     
-    if not menu_list:
-        st.info("Belum ada menu resep. Silakan masukkan resep terlebih dahulu di Tab Restok & Gudang!")
-    else:
-        col1, col2 = st.columns([2, 1])
-        
-        if "cart" not in st.session_state:
-            st.session_state.cart = {}
+    col1, col2, col3 = st.columns([1.5, 1.2, 1.3])
+    
+    if "cart" not in st.session_state:
+        st.session_state.cart = {}
 
-        with col1:
-            st.subheader("Pilih Menu")
+    with col1:
+        st.subheader("1. Pilih Menu")
+        if not menu_list:
+            st.info("Belum ada menu resep. Silakan masukkan resep di Tab Restok & Gudang!")
+        else:
             pilih_menu = st.selectbox("Menu", menu_list)
-            qty = st.number_input("Jumlah", min_value=1, value=1)
+            qty = st.number_input("Jumlah Porsi", min_value=1, value=1)
             
             # Hitung Estimasi HPP Real
             c.execute("""
@@ -93,9 +93,9 @@ with tab_kasir:
             hpp_real = sum([item[1] * item[2] for item in resep_items])
             harga_jual_default = float(hpp_real * 2.5) if hpp_real > 0 else 15000.0
             
-            harga_jual = st.number_input("Harga Jual Per Porsi (Rp)", value=harga_jual_default, step=1000.0)
+            harga_jual = st.number_input("Harga Jual / Porsi (Rp)", value=harga_jual_default, step=1000.0)
             
-            if st.button("➕ Tambah ke Keranjang"):
+            if st.button("➕ Tambah ke Keranjang", use_container_width=True):
                 if pilih_menu in st.session_state.cart:
                     st.session_state.cart[pilih_menu]['qty'] += qty
                 else:
@@ -106,54 +106,63 @@ with tab_kasir:
                     }
                 st.success(f"{pilih_menu} ditambahkan!")
 
-        with col2:
-            st.subheader("🛒 Keranjang Belanja")
-            total_bayar = 0
-            detail_summary = []
-            
-            for item, val in list(st.session_state.cart.items()):
-                subtotal = val['harga'] * val['qty']
-                total_bayar += subtotal
-                detail_summary.append(f"{item} x{val['qty']} ({subtotal:,.0f})")
-                st.write(f"**{item}** x{val['qty']} = Rp {subtotal:,.0f}")
-            
-            st.markdown(f"### **Total: Rp {total_bayar:,.0f}**")
-            
-            metode = st.selectbox("Metode Pembayaran", ["Tunai", "QRIS / Transfer", "Hutang / Kasbon"])
-            
-            nama_pelanggan = ""
-            catatan_kasbon = ""
-            if metode == "Hutang / Kasbon":
-                nama_pelanggan = st.text_input("Nama Pelanggan (Wajib)", placeholder="Misal: Mas Budi")
-                catatan_kasbon = st.text_input("Catatan / No. HP", placeholder="Misal: Langganan / Depan Toko")
+    with col2:
+        st.subheader("2. 🛒 Keranjang Belanja")
+        total_bayar = 0
+        detail_summary = []
+        
+        for item, val in list(st.session_state.cart.items()):
+            subtotal = val['harga'] * val['qty']
+            total_bayar += subtotal
+            detail_summary.append(f"{item} x{val['qty']} ({subtotal:,.0f})")
+            st.write(f"**{item}** x{val['qty']} = Rp {subtotal:,.0f}")
+        
+        st.markdown(f"### **Total: Rp {total_bayar:,.0f}**")
+        
+        metode = st.selectbox("Metode Pembayaran", ["Tunai", "QRIS / Transfer", "Hutang / Kasbon"])
+        
+        nama_pelanggan = ""
+        catatan_kasbon = ""
+        if metode == "Hutang / Kasbon":
+            nama_pelanggan = st.text_input("Nama Pelanggan (Wajib)", placeholder="Misal: Mas Budi")
+            catatan_kasbon = st.text_input("Catatan / No. HP", placeholder="Misal: Langganan")
 
-            if st.button("✅ Selesaikan Transaksi"):
-                if metode == "Hutang / Kasbon" and not nama_pelanggan.strip():
-                    st.error("Nama pelanggan wajib diisi untuk transaksi Kasbon!")
-                elif total_bayar > 0:
-                    status_pembayaran = "Belum Lunas" if metode == "Hutang / Kasbon" else "Lunas"
-                    tgl_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    detail_str = ", ".join(detail_summary)
-                    
-                    # Potong Stok Bahan
-                    for item, val in st.session_state.cart.items():
-                        c.execute("SELECT nama_bahan, jumlah_butuh FROM resep WHERE nama_menu=?", (item,))
-                        resep_bahan = c.fetchall()
-                        for b_nama, b_butuh in resep_bahan:
-                            total_butuh = b_butuh * val['qty']
-                            c.execute("UPDATE stok SET jumlah = jumlah - ? WHERE nama_bahan=?", (total_butuh, b_nama))
-                    
-                    # Simpan Transaksi
-                    c.execute("""
-                        INSERT INTO transaksi (tanggal, detail_order, total_harga, metode_pembayaran, nama_pelanggan, catatan, status_pembayaran)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (tgl_now, detail_str, total_bayar, metode, nama_pelanggan, catatan_kasbon, status_pembayaran))
-                    
-                    conn.commit()
-                    st.session_state.cart = {}
-                    st.balloons()
-                    st.success("Transaksi Berhasil Dicatat!")
-                    st.rerun()
+        if st.button("✅ Selesaikan Transaksi", use_container_width=True):
+            if metode == "Hutang / Kasbon" and not nama_pelanggan.strip():
+                st.error("Nama pelanggan wajib diisi untuk transaksi Kasbon!")
+            elif total_bayar > 0:
+                status_pembayaran = "Belum Lunas" if metode == "Hutang / Kasbon" else "Lunas"
+                tgl_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                detail_str = ", ".join(detail_summary)
+                
+                # Potong Stok Bahan
+                for item, val in st.session_state.cart.items():
+                    c.execute("SELECT nama_bahan, jumlah_butuh FROM resep WHERE nama_menu=?", (item,))
+                    resep_bahan = c.fetchall()
+                    for b_nama, b_butuh in resep_bahan:
+                        total_butuh = b_butuh * val['qty']
+                        c.execute("UPDATE stok SET jumlah = jumlah - ? WHERE nama_bahan=?", (total_butuh, b_nama))
+                
+                # Simpan Transaksi
+                c.execute("""
+                    INSERT INTO transaksi (tanggal, detail_order, total_harga, metode_pembayaran, nama_pelanggan, catatan, status_pembayaran)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (tgl_now, detail_str, total_bayar, metode, nama_pelanggan, catatan_kasbon, status_pembayaran))
+                
+                conn.commit()
+                st.session_state.cart = {}
+                st.balloons()
+                st.success("Transaksi Berhasil!")
+                st.rerun()
+
+    # --- INFORMASI STOK BAHAN LANGSUNG ---
+    with col3:
+        st.subheader("3. 📦 Sisa Stok Bahan")
+        df_stok_live = pd.read_sql_query("SELECT nama_bahan as 'Bahan', jumlah as 'Sisa Stok', satuan as 'Satuan' FROM stok", conn)
+        if df_stok_live.empty:
+            st.caption("Belum ada data bahan di gudang.")
+        else:
+            st.dataframe(df_stok_live, hide_index=True, use_container_width=True)
 
 # ==========================================
 # 2. TAB BUKU KASBON
@@ -203,7 +212,7 @@ with tab_kasbon:
                 st.rerun()
 
 # ==========================================
-# 3. TAB RESTOK & STOK GUDANG (MANUAL)
+# 3. TAB RESTOK & STOK GUDANG (MANUAL WITH DROPDOWN LIST)
 # ==========================================
 with tab_stok:
     st.header("📦 Kelola Stok Gudang & Restok Manual")
@@ -212,12 +221,35 @@ with tab_stok:
     
     with col_st1:
         st.subheader("➕ Tambah / Restok Bahan Manual")
-        input_bahan = st.text_input("Nama Bahan Baku", placeholder="misal: Susu UHT 1L").lower().strip()
+        
+        # Ambil daftar bahan baku yang sudah ada di database + opsi standar kopi
+        c.execute("SELECT nama_bahan FROM stok")
+        existing_bahan = [row[0] for row in c.fetchall()]
+        
+        # Preset bahan umum toko kopi jika database masih kosong
+        default_preset = ["biji kopi espresso", "susu uht 1l", "susu skm", "sirup vanila", "gula aren", "cup 16oz", "sedotan"]
+        all_bahan_options = list(set(existing_bahan + default_preset))
+        all_bahan_options.sort()
+        all_bahan_options.append("➕ [Tambah Bahan Baru...]")
+        
+        pilihan_bahan = st.selectbox("Pilih Nama Bahan Baku", all_bahan_options)
+        
+        # Jika memilih tambah bahan baru
+        if pilihan_bahan == "➕ [Tambah Bahan Baru...]":
+            input_bahan = st.text_input("Ketik Nama Bahan Baru", placeholder="misal: Matcha Powder").lower().strip()
+            input_satuan = st.text_input("Satuan", placeholder="misal: gram, ml, pcs, kaleng").lower().strip()
+        else:
+            input_bahan = pilihan_bahan
+            # Auto-fill satuan jika bahan sudah ada di database
+            c.execute("SELECT satuan FROM stok WHERE nama_bahan=?", (input_bahan,))
+            satuan_res = c.fetchone()
+            satuan_default = satuan_res[0] if satuan_res else "pcs"
+            input_satuan = st.text_input("Satuan", value=satuan_default).lower().strip()
+            
         input_jumlah = st.number_input("Jumlah Restok", min_value=0.0, value=1.0)
-        input_satuan = st.text_input("Satuan", placeholder="misal: ml, gram, pcs, kaleng").lower().strip()
         input_harga = st.number_input("Harga Beli Total (Rp)", min_value=0.0, step=1000.0)
         
-        if st.button("📥 Simpan Restok Manual"):
+        if st.button("📥 Simpan Restok Manual", use_container_width=True):
             if input_bahan and input_satuan:
                 harga_satuan = input_harga / input_jumlah if input_jumlah > 0 else 0
                 tgl_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -244,7 +276,7 @@ with tab_stok:
 
     with col_st2:
         st.subheader("📋 Status Stok & Real Cost HPP Saat Ini")
-        df_stok = pd.read_sql_query("SELECT nama_bahan, jumlah, satuan, harga_per_satuan as hpp_per_satuan FROM stok", conn)
+        df_stok = pd.read_sql_query("SELECT nama_bahan as 'Bahan Baku', jumlah as 'Jumlah Stok', satuan as 'Satuan', harga_per_satuan as 'HPP / Satuan (Rp)' FROM stok", conn)
         st.dataframe(df_stok, use_container_width=True)
 
 # ==========================================
@@ -281,7 +313,7 @@ with tab_laporan:
             image = Image.open(uploaded_file)
             st.image(image, caption="Preview Nota Belanja", use_container_width=True)
             
-            if st.button("🤖 Analisis Nota dengan AI"):
+            if st.button("🤖 Analisis Nota dengan AI", use_container_width=True):
                 if not client:
                     st.error("API Key Gemini belum dipasang di Streamlit Secrets!")
                 else:
@@ -312,7 +344,7 @@ with tab_laporan:
             df_ai = pd.DataFrame(st.session_state['ai_nota_result'])
             st.dataframe(df_ai, use_container_width=True)
             
-            if st.button("📥 Konfirmasi & Update ke Stok & Laporan"):
+            if st.button("📥 Konfirmasi & Update ke Stok & Laporan", use_container_width=True):
                 tgl_sekarang = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 for item in st.session_state['ai_nota_result']:
                     nama = item['nama_bahan'].lower().strip()
