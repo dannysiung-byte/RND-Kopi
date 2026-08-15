@@ -51,11 +51,11 @@ client = genai.Client(api_key=gemini_key) if gemini_key else None
 st.title("☕ POS Kasir Kopi & Manajemen Stok (V2)")
 
 # --- NAVIGATION TABS ---
-tab_kasir, tab_kasbon, tab_stok_scan, tab_laporan = st.tabs([
+tab_kasir, tab_kasbon, tab_stok, tab_laporan = st.tabs([
     "🛒 POS Kasir", 
     "📑 Buku Kasbon", 
-    "📦 Restok & Scan AI", 
-    "📊 Laporan Owner"
+    "📦 Restok & Gudang", 
+    "📊 Laporan & Scan AI"
 ])
 
 # ==========================================
@@ -69,7 +69,7 @@ with tab_kasir:
     menu_list = [row[0] for row in c.fetchall()]
     
     if not menu_list:
-        st.info("Belum ada menu resep. Silakan masukkan resep terlebih dahulu di Tab Restok!")
+        st.info("Belum ada menu resep. Silakan masukkan resep terlebih dahulu di Tab Restok & Gudang!")
     else:
         col1, col2 = st.columns([2, 1])
         
@@ -136,7 +136,6 @@ with tab_kasir:
                     detail_str = ", ".join(detail_summary)
                     
                     # Potong Stok Bahan
-                    stok_cukup = True
                     for item, val in st.session_state.cart.items():
                         c.execute("SELECT nama_bahan, jumlah_butuh FROM resep WHERE nama_menu=?", (item,))
                         resep_bahan = c.fetchall()
@@ -162,7 +161,6 @@ with tab_kasir:
 with tab_kasbon:
     st.header("📑 Buku Catatan Kasbon / Hutang Pelanggan")
     
-    # Ambil Data Kasbon Belum Lunas
     query_kasbon = """
         SELECT nama_pelanggan, SUM(total_harga) as total_hutang, COUNT(id) as jumlah_transaksi
         FROM transaksi
@@ -205,20 +203,83 @@ with tab_kasbon:
                 st.rerun()
 
 # ==========================================
-# 3. TAB RESTOK & SCAN AI NOTA
+# 3. TAB RESTOK & STOK GUDANG (MANUAL)
 # ==========================================
-with tab_stok_scan:
-    st.header("📦 Restok Gudang & AI Scan Nota Belanja")
+with tab_stok:
+    st.header("📦 Kelola Stok Gudang & Restok Manual")
     
-    col_s1, col_s2 = st.columns([1, 1])
+    col_st1, col_st2 = st.columns([1, 1])
     
-    with col_s1:
-        st.subheader("📸 AI Scan Nota Belanja (Otomatis)")
-        uploaded_file = st.file_uploader("Upload / Foto Nota Belanja (Pasar/Supermarket)", type=["jpg", "jpeg", "png"])
+    with col_st1:
+        st.subheader("➕ Tambah / Restok Bahan Manual")
+        input_bahan = st.text_input("Nama Bahan Baku", placeholder="misal: Susu UHT 1L").lower().strip()
+        input_jumlah = st.number_input("Jumlah Restok", min_value=0.0, value=1.0)
+        input_satuan = st.text_input("Satuan", placeholder="misal: ml, gram, pcs, kaleng").lower().strip()
+        input_harga = st.number_input("Harga Beli Total (Rp)", min_value=0.0, step=1000.0)
+        
+        if st.button("📥 Simpan Restok Manual"):
+            if input_bahan and input_satuan:
+                harga_satuan = input_harga / input_jumlah if input_jumlah > 0 else 0
+                tgl_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                c.execute("SELECT id FROM stok WHERE nama_bahan=?", (input_bahan,))
+                existing = c.fetchone()
+                
+                if existing:
+                    c.execute("UPDATE stok SET jumlah = jumlah + ?, harga_per_satuan = ? WHERE nama_bahan=?", 
+                              (input_jumlah, harga_satuan, input_bahan))
+                else:
+                    c.execute("INSERT INTO stok (nama_bahan, jumlah, satuan, harga_per_satuan) VALUES (?, ?, ?, ?)", 
+                              (input_bahan, input_jumlah, input_satuan, harga_satuan))
+                
+                if input_harga > 0:
+                    c.execute("INSERT INTO biaya_operasional (tanggal, keterangan, total_biaya) VALUES (?, ?, ?)",
+                              (tgl_now, f"Restok Manual: {input_bahan} ({input_jumlah} {input_satuan})", input_harga))
+                
+                conn.commit()
+                st.success(f"Berhasil menambahkan {input_bahan} ke gudang!")
+                st.rerun()
+            else:
+                st.error("Nama bahan dan satuan wajib diisi!")
+
+    with col_st2:
+        st.subheader("📋 Status Stok & Real Cost HPP Saat Ini")
+        df_stok = pd.read_sql_query("SELECT nama_bahan, jumlah, satuan, harga_per_satuan as hpp_per_satuan FROM stok", conn)
+        st.dataframe(df_stok, use_container_width=True)
+
+# ==========================================
+# 4. TAB LAPORAN & SCAN AI NOTA
+# ==========================================
+with tab_laporan:
+    st.header("📊 Laporan Keuangan Owner & Scan AI Nota")
+    
+    # --- METRICS KEUANGAN ---
+    df_trans = pd.read_sql_query("SELECT * FROM transaksi", conn)
+    df_biaya = pd.read_sql_query("SELECT * FROM biaya_operasional", conn)
+    
+    total_omzet = df_trans[df_trans['status_pembayaran'] == 'Lunas']['total_harga'].sum() if not df_trans.empty else 0
+    total_biaya_restok = df_biaya['total_biaya'].sum() if not df_biaya.empty else 0
+    laba_bersih = total_omzet - total_biaya_restok
+    
+    col_l1, col_l2, col_l3 = st.columns(3)
+    col_l1.metric("Total Omzet (Lunas)", f"Rp {total_omzet:,.0f}")
+    col_l2.metric("Total Pengeluaran Restok", f"Rp {total_biaya_restok:,.0f}")
+    col_l3.metric("Estimasi Laba Bersih", f"Rp {laba_bersih:,.0f}")
+    
+    st.divider()
+    
+    # --- SCAN AI NOTA SECTION ---
+    st.subheader("📸 AI Scan Nota Pengeluaran / Belanja")
+    st.caption("Upload foto nota belanja dari pasar/supermarket. AI akan otomatis mencatat pengeluaran & meng-update stok gudang.")
+    
+    col_scan1, col_scan2 = st.columns([1, 1])
+    
+    with col_scan1:
+        uploaded_file = st.file_uploader("Upload / Foto Nota Belanja", type=["jpg", "jpeg", "png"])
         
         if uploaded_file is not None:
             image = Image.open(uploaded_file)
-            st.image(image, caption="Preview Nota", use_container_width=True)
+            st.image(image, caption="Preview Nota Belanja", use_container_width=True)
             
             if st.button("🤖 Analisis Nota dengan AI"):
                 if not client:
@@ -245,12 +306,13 @@ with tab_stok_scan:
                         except Exception as e:
                             st.error(f"Gagal membaca nota: {e}")
 
+    with col_scan2:
         if 'ai_nota_result' in st.session_state:
-            st.subheader("Hasil Ekstraksi AI:")
+            st.write("### Hasil Ekstraksi AI:")
             df_ai = pd.DataFrame(st.session_state['ai_nota_result'])
-            st.dataframe(df_ai)
+            st.dataframe(df_ai, use_container_width=True)
             
-            if st.button("📥 Konfirmasi & Update ke Stok"):
+            if st.button("📥 Konfirmasi & Update ke Stok & Laporan"):
                 tgl_sekarang = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 for item in st.session_state['ai_nota_result']:
                     nama = item['nama_bahan'].lower().strip()
@@ -259,8 +321,8 @@ with tab_stok_scan:
                     total_biaya = float(item['total_harga'])
                     harga_satuan = total_biaya / qty if qty > 0 else 0
                     
-                    # Update atau insert stok & HPP
-                    c.execute("SELECT id, jumlah FROM stok WHERE nama_bahan=?", (nama,))
+                    # Update/Insert ke Stok
+                    c.execute("SELECT id FROM stok WHERE nama_bahan=?", (nama,))
                     existing = c.fetchone()
                     if existing:
                         c.execute("UPDATE stok SET jumlah = jumlah + ?, harga_per_satuan = ? WHERE nama_bahan=?", 
@@ -269,37 +331,15 @@ with tab_stok_scan:
                         c.execute("INSERT INTO stok (nama_bahan, jumlah, satuan, harga_per_satuan) VALUES (?, ?, ?, ?)",
                                   (nama, qty, satuan, harga_satuan))
                         
-                    # Catat biaya operasional
+                    # Catat ke Pengeluaran Operasional Laporan
                     c.execute("INSERT INTO biaya_operasional (tanggal, keterangan, total_biaya) VALUES (?, ?, ?)",
                               (tgl_sekarang, f"Restok AI: {nama} ({qty} {satuan})", total_biaya))
                 
                 conn.commit()
                 del st.session_state['ai_nota_result']
-                st.success("Stok & Real Cost HPP berhasil diperbarui!")
+                st.success("Pengeluaran & Stok berhasil diperbarui!")
                 st.rerun()
 
-    with col_s2:
-        st.subheader("📋 Status Stok & Real Cost HPP Saat Ini")
-        df_stok = pd.read_sql_query("SELECT nama_bahan, jumlah, satuan, harga_per_satuan as hpp_per_satuan FROM stok", conn)
-        st.dataframe(df_stok, use_container_width=True)
-
-# ==========================================
-# 4. TAB LAPORAN OWNER
-# ==========================================
-with tab_laporan:
-    st.header("📊 Laporan Keuangan Owner")
-    
-    df_trans = pd.read_sql_query("SELECT * FROM transaksi", conn)
-    df_biaya = pd.read_sql_query("SELECT * FROM biaya_operasional", conn)
-    
-    total_omzet = df_trans[df_trans['status_pembayaran'] == 'Lunas']['total_harga'].sum() if not df_trans.empty else 0
-    total_biaya_restok = df_biaya['total_biaya'].sum() if not df_biaya.empty else 0
-    laba_bersih = total_omzet - total_biaya_restok
-    
-    col_l1, col_l2, col_l3 = st.columns(3)
-    col_l1.metric("Total Omzet (Lunas)", f"Rp {total_omzet:,.0f}")
-    col_l2.metric("Total Pengeluaran Restok", f"Rp {total_biaya_restok:,.0f}")
-    col_l3.metric("Estimasi Laba Bersih", f"Rp {laba_bersih:,.0f}")
-    
-    st.subheader("Riwayat Transaksi")
+    st.divider()
+    st.subheader("Riwayat Transaksi Penjualan")
     st.dataframe(df_trans, use_container_width=True)
